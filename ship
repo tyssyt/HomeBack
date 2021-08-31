@@ -1,6 +1,6 @@
 set -e | exit
 
 ssh tys@pihole.home 'sudo systemctl stop home_back.service && rm -f /home/tys/home_back'
-scp -r target/aarch64-unknown-linux-gnu/release/home_back tys@pihole.home:/opt/home_back/home_back
+scp target/aarch64-unknown-linux-gnu/release/home_back chat.html tys@pihole.home:/opt/home_back/
 ssh tys@pihole.home 'sudo systemctl start home_back.service'
-echo 'Successfully shipped Homeback to tys@pihole.home:/opt/home_back/home_back'
+echo 'Successfully shipped Homeback to tys@pihole.home:/opt/home_back/'

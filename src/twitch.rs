@@ -126,6 +126,7 @@ impl Twitch {
             following.extend(response.data.into_iter().map(|follow| follow.to_id));
         }
 
+        following.push(from_id.clone()); // also show the user if he is online
         return Ok(following);
     }
 

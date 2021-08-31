@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>Twitch Chat</title>
+    <style type="text/css">          
+        html,
+        body,
+        iframe {
+            margin: 0px;
+            padding: 0px;
+            height: 100%;
+            border: none;
+        }
+          
+        iframe {
+            display: block;
+            width: 100%;
+            border: none;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        body {
+            background-color: black;
+        }
+    </style>
+</head>
+
+<body>
+    <iframe id='iFrame'></iframe>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const channel = params.get("channel");
+        const iFrame = document.getElementById('iFrame');
+        iFrame.setAttribute('src', 'https://nightdev.com/hosted/obschat?theme=bttv_dark&fade=false&bot_activity=true&prevent_clipping=false&channel=' + channel);
+    </script>
+</body>
+
+</html>
