@@ -5,36 +5,68 @@ use std::env;
 use dotenv::dotenv;
 use env_logger::{Env, WriteStyle};
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, put, post, delete, web, http};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use process::*;
 
 mod process;
 mod twitch;
 mod download;
+mod dvbc;
+mod files;
 
 lazy_static! {
-    static ref CHAT:             process::ProcessHandler<String, process::Chat>       = process::ProcessHandler::new(process::Chat{}, None);
-    static ref PLAYER:           process::ProcessHandler<String, process::Streamlink> = process::ProcessHandler::new(process::Streamlink{}, Some(|_| CHAT.stop().unwrap()));
-    static ref TWITCH:           twitch::Twitch                                       = twitch::Twitch::new();
-    static ref DOWNLOAD_MANAGER: download::DownloadManager                            = download::DownloadManager::new();
+    static ref CHAT:             ProcessHandler<String, process::Chat>        = process::ProcessHandler::new(process::Chat{}, None);
+    static ref VIDEO_PLAYER:     ProcessHandler<VideoPlayerArgs, VideoPlayer> = ProcessHandler::new(process::VideoPlayer{}, Some(|args, _| if let VideoPlayerArgs::Twitch(_) = args {CHAT.stop().unwrap()}));
+    static ref TWITCH:           twitch::Twitch                               = twitch::Twitch::new();
+    static ref DOWNLOAD_MANAGER: download::DownloadManager                    = download::DownloadManager::new();
+    static ref DVBC:             dvbc::DvbC                                   = dvbc::DvbC::new();
+    static ref DVBC_PREVIEWS:    dvbc::DvbCPreviews                           = dvbc::DvbCPreviews::new();
 }
 
-#[get("/stream")]
-async fn get_stream() -> impl Responder {
-    match PLAYER.running() {
-        Some(stream) => HttpResponse::Ok().json(&*stream),
+#[derive(Serialize, Deserialize)]
+pub enum VideoPlayerSomthing {
+    Twitch(String),
+    DvbC(String),
+}
+impl From<&VideoPlayerArgs> for VideoPlayerSomthing {
+    fn from(args: &VideoPlayerArgs) -> Self {
+        return match args {
+            VideoPlayerArgs::Twitch(stream) => VideoPlayerSomthing::Twitch(stream.clone()),
+            VideoPlayerArgs::DvbC(channel) => VideoPlayerSomthing::DvbC(channel.name.clone()),
+        };
+    }
+}
+
+#[get("/videoplayer")]
+async fn get_videoplayer() -> impl Responder {
+    match VIDEO_PLAYER.running() {
+        Some(args) => HttpResponse::Ok().json(VideoPlayerSomthing::from(&*args)),
         None         => HttpResponse::NoContent().finish()
     }
 }
 
-#[put("/stream")]
-async fn open_stream(web::Json(stream): web::Json<String>) -> impl Responder {
-    HttpResponse::Ok().json(&*PLAYER.start(stream).unwrap())
+#[put("/videoplayer")]
+async fn start_videoplayer(web::Json(args): web::Json<VideoPlayerSomthing>) -> impl Responder {
+    return match args {
+        VideoPlayerSomthing::Twitch(stream) => HttpResponse::Ok().json(VideoPlayerSomthing::from(&*VIDEO_PLAYER.start(VideoPlayerArgs::Twitch(stream)).unwrap())),
+        VideoPlayerSomthing::DvbC(channel_name) => {                
+            match DVBC.get_channels() {
+                None => HttpResponse::InternalServerError().finish(), // TODO some return code / header that specifies we couldn't load channels
+                Some(channels) => {
+                    match channels.tv.iter().find(|channel| channel.name == channel_name) {
+                        None => HttpResponse::NotFound().finish(),
+                        Some(channel) => HttpResponse::Ok().json(VideoPlayerSomthing::from(&*VIDEO_PLAYER.start(VideoPlayerArgs::DvbC(channel.clone())).unwrap()))
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[delete("/stream")]
-async fn stop_stream() -> impl Responder {
-    PLAYER.stop().unwrap();
+async fn stop_videoplayer() -> impl Responder {
+    VIDEO_PLAYER.stop().unwrap();
     HttpResponse::NoContent().finish()
 }
 
@@ -72,29 +104,9 @@ async fn get_scan(web::Path(file): web::Path<String>) -> impl Responder {
     HttpResponse::Ok().json(download::read_scan_file(file).unwrap())
 }
 
-#[delete("/download/scan/{file}")]
-async fn delete_scan(web::Path(file): web::Path<String>) -> impl Responder {
-    download::delete_scan_file(file).unwrap();
-    HttpResponse::NoContent().finish()
-}
-
-#[get("/download/files/{file}")]
-async fn get_download_file(web::Path(file): web::Path<String>) -> impl Responder {
-    if download::find_in_download_folder(&file) {
-        HttpResponse::Ok().json(&file)
-    } else {
-        HttpResponse::NoContent().finish()
-    }
-}
-#[derive(Deserialize)]
-struct StupidQueryWrapper {
-    file: String,
-}
-#[get("/download/files")]
-async fn get_download_files(web::Query(StupidQueryWrapper{file}): web::Query<StupidQueryWrapper>) -> impl Responder {
-    let files = file.split(",");
-    let response: Vec<&str> = files.filter(|file| download::find_in_download_folder(file)).collect();
-    HttpResponse::Ok().json(response)
+#[get("/download/files/{subfolder}")]
+async fn get_downloads_subfolder(web::Path(subfolder): web::Path<String>) -> impl Responder {
+    HttpResponse::Ok().json(download::read_downloads_subfolder(subfolder).unwrap())
 }
 
 
@@ -124,34 +136,66 @@ async fn post_download(web::Json(Download{url, path, query}): web::Json<Download
 }
 
 #[delete("/download/{uuid}")]
-async fn delete_download(web::Path(uuid): web::Path<Uuid>) -> impl Responder {
-    DOWNLOAD_MANAGER.delete_download(uuid);
+async fn cancel_download(web::Path(uuid): web::Path<Uuid>) -> impl Responder {
+    DOWNLOAD_MANAGER.cancel_download(uuid);
     HttpResponse::NoContent().finish()
 }
 
+#[get("/dvbc/tv")]
+async fn get_dvbc_tv() -> impl Responder {
+    match DVBC.get_channels() {
+        Some(channels) => { let response: Vec<&String> = channels.tv.iter().map(|c| &c.name).collect(); HttpResponse::Ok().json(response) }
+        None           => HttpResponse::NoContent().finish(), // TODO some return code that specifies we couldn't load channels
+    }
+}
+
+#[get("/dvbc/radio")]
+async fn get_dvbc_radio() -> impl Responder {
+    match DVBC.get_channels() {
+        Some(channels) => { let response: Vec<&String> = channels.radio.iter().map(|c| &c.name).collect(); HttpResponse::Ok().json(response) }
+        None           => HttpResponse::NoContent().finish(), // TODO some return code that specifies we couldn't load channels
+    }
+}
+
+#[post("/dvbc/tv/previews")] // it's a get with a body...
+async fn get_dvbc_tv_previews(web::Json(channel_names): web::Json<Vec<String>>) -> impl Responder {
+    match DVBC.get_channels() {
+        None => HttpResponse::InternalServerError().finish(), // TODO some return code / header that specifies we couldn't load channels
+        Some(channels) => {
+            let previews : Vec<Option<dvbc::ChannelPreview>> = channel_names.iter()
+                .map(|name| channels.tv.iter()
+                    .find(|channel| &channel.name == name)
+                    .map(|channel| DVBC_PREVIEWS.get_preview(channel))
+            ).collect();
+            HttpResponse::Ok().json(&previews)
+        }
+    }
+}
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).write_style(WriteStyle::Always).init();
+
     HttpServer::new(move || {
         App::new()
-            .service(get_stream)
-            .service(open_stream)
-            .service(stop_stream)
+            .service(get_videoplayer)
+            .service(start_videoplayer)
+            .service(stop_videoplayer)
             .service(get_chat)
             .service(open_chat)
             .service(stop_chat)
             .service(get_twitch_live)
             .service(get_scans)
             .service(get_scan)
-            .service(delete_scan)
-            .service(get_download_file)
-            .service(get_download_files)
+            .service(get_downloads_subfolder)
             .service(get_download)
             .service(get_downloads)
             .service(post_download)
-            .service(delete_download)
+            .service(cancel_download)
+            .service(get_dvbc_tv)
+            .service(get_dvbc_radio)
+            .service(get_dvbc_tv_previews)
     })
         .bind(env::var("ADDR").unwrap_or("127.0.0.1:23559".to_string()))?
         .run()

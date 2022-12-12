@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 use reqwest::{Client, header};
 use serde::Deserialize;
+use log::info;
 
 pub struct Twitch {
     client: Client,
@@ -68,12 +69,13 @@ impl Twitch {
 
     fn make_auth_token(id: &String, secret: &String) -> Result<AuthToken, reqwest::Error> {
         let request_url = format!("https://id.twitch.tv/oauth2/token?client_id={}&client_secret={}&grant_type=client_credentials", id, secret);
-        let response: AuthToken = Client::builder().timeout(Duration::from_secs(2)).build().unwrap().post(&request_url).send()?.json()?;
+        let response: AuthToken = Client::builder().timeout(Duration::from_secs(2)).build().unwrap().post(&request_url).send()?.json()?;        
+        info!("Twitch OAuth-Token Request successfull");
         return Ok(response);
     }
 
     //TODO Result of Option seems overkill, I doubt people care about the difference?
-    pub fn get_channel_id(&self, channel: &String) -> Result<Option<String>, reqwest::Error> {
+    pub fn get_channel_id(&self, channel: &str) -> Result<Option<String>, reqwest::Error> {
         let request_url = format!("https://api.twitch.tv/helix/users?login={}", channel);
         let mut response: Data<User> = self.client.get(&request_url)
                 .bearer_auth(&self.auth_token.access_token)
@@ -85,7 +87,7 @@ impl Twitch {
         }
     }
 
-    pub fn get_following(&self, from_channel: String) -> Result<Arc<Vec<String>>, reqwest::Error> {
+    pub fn get_following(&self, from_channel: &str) -> Result<Arc<Vec<String>>, reqwest::Error> {
         {   //clean cache
             let now = Instant::now();
             let mut cache = self.follow_cache.lock().unwrap();        
@@ -100,11 +102,12 @@ impl Twitch {
         if id.is_none() {
             return Ok(Arc::new(Vec::new()));
         }
-        let following = self.query_following(&id.unwrap())?;      
+        let following = self.query_following(&id.unwrap())?;
+        info!("Loaded & Cached the {} streams {} is following", following.len(), from_channel);
         let ret = Arc::new(following);
 
         let mut cache = self.follow_cache.lock().unwrap(); 
-        cache.push((Instant::now(), from_channel, ret.clone()));
+        cache.push((Instant::now(), from_channel.to_owned(), ret.clone()));
         return Ok(ret);
     }
 
@@ -131,7 +134,7 @@ impl Twitch {
     }
 
     pub fn get_online_following(&self, from_channel: String) -> Result<Vec<serde_json::Value>, reqwest::Error> {
-        let following = self.get_following(from_channel)?;
+        let following = self.get_following(&from_channel)?;
         let mut online: Vec<serde_json::Value> = Vec::new();
 
         for chunk in following.chunks(100) {
@@ -142,6 +145,7 @@ impl Twitch {
             online.append(&mut response.data);
         }
 
+        info!("Checked the {} streams {} is following. {} are online", following.len(), from_channel, online.len());
         return Ok(online);
     }
 

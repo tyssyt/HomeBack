@@ -1,21 +1,21 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf, Component};
+use std::path::PathBuf;
 use std::error::Error;
 use reqwest::Client;
 use threadpool::ThreadPool;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 use serde::Serialize;
+use super::files::sanitize_path;
+use lazy_static::lazy_static;
+use regex::Regex;
+use log::error;
 
 lazy_static! {
     static ref SCAN_FOLDER :     PathBuf = PathBuf::from(env::var("SCAN_FOLDER").expect("SCAN_FOLDER not set"));
     static ref DOWNLOAD_FOLDER : PathBuf = PathBuf::from(env::var("DOWNLOAD_FOLDER").expect("DOWNLOAD_FOLDER not set"));
-}
-
-fn sanitize_path(path: &str) -> PathBuf {
-    Path::new(path).components().filter(|c| c != &Component::ParentDir).collect()
 }
 
 pub fn read_scan_folder() -> io::Result<Vec<String>> { 
@@ -27,21 +27,16 @@ pub fn read_scan_folder() -> io::Result<Vec<String>> {
 }
 
 pub fn read_scan_file(file: String) -> io::Result<Vec<String>> {
-    let mut content: &str = &fs::read_to_string(SCAN_FOLDER.join(sanitize_path(&file)))?;
-
-    let mut links = Vec::new();
-    loop {
-        if let Some(start) = content.find("https://sinbad.hi10") {
-            content = &content[start..];
-            if let Some(end) = content.find("\">") {
-                let link = String::from(&content[..end]);
-                links.push(link);            
-            }
-            content = &content[1..];
-        } else {
-            break;
-        }
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r#"https://[A-Za-z0-9]+?\.hi10an[^>";]*"#).unwrap();
     }
+
+    let content: &str = &fs::read_to_string(SCAN_FOLDER.join(sanitize_path(&file)))?;
+    
+    let mut links = RE.find_iter(content)
+        .map(|m| m.as_str().to_string() )
+        .filter(|link| !link.starts_with("https://stream."))
+        .collect::<Vec<String>>();
 
     links.sort();
     links.dedup();
@@ -49,12 +44,12 @@ pub fn read_scan_file(file: String) -> io::Result<Vec<String>> {
     return Ok(links);
 }
 
-pub fn delete_scan_file(file: String) -> io::Result<()> {
-    fs::remove_file(SCAN_FOLDER.join(sanitize_path(&file)))
-}
-
-pub fn find_in_download_folder(file: &str) -> bool { 
-    DOWNLOAD_FOLDER.join(sanitize_path(&file)).exists()
+pub fn read_downloads_subfolder(subfolder: String) -> io::Result<Vec<String>> {
+    Ok(fs::read_dir(DOWNLOAD_FOLDER.join(sanitize_path(&subfolder)))?
+        .filter_map(|file| file.ok())
+        .filter(|file| file.file_type().map_or(false, |f_type| f_type.is_file()))
+        .map(|file| file.file_name().into_string().unwrap())
+        .collect())
 }
 
 pub struct DownloadManager {
@@ -67,8 +62,7 @@ pub struct DownloadManager {
 pub enum Status {
     Created,
     Running,
-    Finished,
-    Error
+    Error,
 }
 
 #[derive(Serialize, Clone)]
@@ -94,20 +88,20 @@ impl DownloadManager {
         let download = Arc::new(Mutex::new(raw_download.clone()));
         self.downloads.lock()?.push(download.clone());
 
-        self.threadpool.lock()?.execute(move || DownloadManager::dl_wrap(&self.client, download, query));
+        self.threadpool.lock()?.execute(move || self.dl_wrap(&self.client, download, query));
         Ok(raw_download)
     }
 
-    fn dl_wrap(client: &Client, download: Arc<Mutex<Download>>, query: Option<String>) {
-        if let Err(error) = DownloadManager::dl(client, &download, query) {
+    fn dl_wrap(&self, client: &Client, download: Arc<Mutex<Download>>, query: Option<String>) {
+        if let Err(error) = self.dl(client, &download, query) {
             let mut dl = download.lock().unwrap();
             dl.status = Status::Error;
-            println!("Error during Download: {}", error);
+            error!("Error during Download: {}", error);
         }
     }
 
-    fn dl(client: &Client, download: &Arc<Mutex<Download>>, query: Option<String>) -> Result<(), Box<dyn Error>> {
-        let (mut response, mut file) = {
+    fn dl(&self, client: &Client, download: &Arc<Mutex<Download>>, query: Option<String>) -> Result<(), Box<dyn Error>> {
+        let (mut response, mut file, uuid) = {
             let mut dl = download.lock().unwrap();
 
             //prepare query
@@ -127,14 +121,14 @@ impl DownloadManager {
             dl.size = response.content_length();
             dl.status = Status::Running;
 
-            (response, file)
+            (response, file, dl.uuid)
         }; //unlock mutex
 
         //this locks the thread until download is completed
         response.copy_to(&mut file)?;
 
-        let mut dl = download.lock().unwrap();
-        dl.status = Status::Finished;
+        //download finished, remove
+        self.remove_download(uuid);
         Ok(())
     }
 
@@ -161,16 +155,26 @@ impl DownloadManager {
         dls
     }
 
-    pub fn delete_download(&self, uuid: Uuid) {
-        let mut downloads = self.downloads.lock().unwrap();
-        if let Some(pos) = downloads.iter().position(|dl| dl.lock().unwrap().uuid == uuid) {
-            let removed = downloads.remove(pos);
-            let rm = removed.lock().unwrap();
-            if rm.status == Status::Running {
-                //TODO cancel Download
+    pub fn cancel_download(&self, uuid: Uuid) {
+        if let Some(download) = self.remove_download(uuid) {
+            /*
+            let dl = download.lock().unwrap();
+            match dl.status {
+                Status::Created => // remove from queue
+                Status::Running => // cancel download
+                Status::Error => // just remove from list, maybe remove the file as well?
             }
+            */
         }
     }
+
+    fn remove_download(&self, uuid: Uuid) -> Option<Arc<Mutex<Download>>> {
+        let mut downloads = self.downloads.lock().unwrap();
+        downloads.iter()
+            .position(|dl| dl.lock().unwrap().uuid == uuid)
+            .map(|pos| downloads.remove(pos))
+    }
+
 }
 
 impl Download {

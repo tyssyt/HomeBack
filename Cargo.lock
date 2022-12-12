@@ -1001,6 +1001,7 @@ dependencies = [
  "futures 0.3.16",
  "lazy_static",
  "log",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
