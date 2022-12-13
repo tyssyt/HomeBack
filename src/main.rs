@@ -25,6 +25,7 @@ lazy_static! {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(tag = "type", content = "uri")]
 pub enum VideoPlayerSomthing {
     Twitch(String),
     DvbC(String),
@@ -64,7 +65,7 @@ async fn start_videoplayer(web::Json(args): web::Json<VideoPlayerSomthing>) -> i
     }
 }
 
-#[delete("/stream")]
+#[delete("/videoplayer")]
 async fn stop_videoplayer() -> impl Responder {
     VIDEO_PLAYER.stop().unwrap();
     HttpResponse::NoContent().finish()

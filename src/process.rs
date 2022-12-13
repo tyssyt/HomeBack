@@ -77,12 +77,10 @@ impl ProcessStarter<VideoPlayerArgs> for VideoPlayer {
             VideoPlayerArgs::Twitch(stream) => {                
                 info!("opening Twitch Stream: {}", &stream);
                 Command::new("streamlink")
-                    .arg("-v")
+                    //.arg("-v")
                     .arg("--player-passthrough").arg("hls,http")
                     .arg(stream)
                     .stdin(Stdio::null())
-                    .stdout(Stdio::null()) // TODO write to log file
-                    .stderr(Stdio::null()) // TODO write to log file
                     .spawn()
             },
             VideoPlayerArgs::DvbC(channel) => {
@@ -91,8 +89,6 @@ impl ProcessStarter<VideoPlayerArgs> for VideoPlayer {
                     .arg("-sn")
                     .arg(&channel.url)
                     .stdin(Stdio::null())
-                    .stdout(Stdio::null()) // TODO write to log file
-                    .stderr(Stdio::null()) // TODO write to log file
                     .spawn()
             },
         };
