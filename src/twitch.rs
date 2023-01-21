@@ -1,15 +1,22 @@
 use std::env;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use reqwest::{Client, header};
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 use log::info;
+use itertools::Itertools;
 
 pub struct Twitch {
     client: Client,
     auth_token: AuthToken,
+    follow_cache: Mutex<Vec<FollowCacheEntry>>,
+}
 
-    follow_cache: Mutex<Vec<(Instant, String, Arc<Vec<String>>)>>,
+struct FollowCacheEntry {
+    created_at: Instant,
+    from_channel: String,
+    to_users: Arc<Vec<User>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -18,11 +25,11 @@ struct AuthToken {
     expires_in: i32,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct User {
     id: String,
-//    login: String,
-//    display_name: String,
+    profile_image_url: String,
+    offline_image_url: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -38,6 +45,13 @@ struct FollowData {
     pagination: Pagination,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Stream {
+    user_id: String,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_json::Value>,
+}
+
 #[derive(Deserialize, Debug)]
 struct Data<T> {
     data: Vec<T>
@@ -48,7 +62,14 @@ struct Pagination {
     cursor: Option<String>,
 }
 
-//TODO also load user profile image url
+#[derive(Serialize, Debug)]
+pub struct FollowResponse {
+    profile_image_url: String,
+    offline_image_url: String,
+    #[serde(flatten)]
+    stream: Stream,
+}
+
 impl Twitch {
 
     pub fn new() -> Twitch {
@@ -87,28 +108,50 @@ impl Twitch {
         }
     }
 
-    pub fn get_following(&self, from_channel: &str) -> Result<Arc<Vec<String>>, reqwest::Error> {
+    pub fn query_users(&self, ids: &[String]) -> Result<Vec<User>, reqwest::Error> {        
+        let request_url = format!("https://api.twitch.tv/helix/users?id={}", ids.join("&id="));
+        let response: Data<User> = self.client.get(&request_url)
+                .bearer_auth(&self.auth_token.access_token)
+                .send()?.json()?;
+        return Ok(response.data);
+    }
+
+    pub fn get_following(&self, from_channel: &str) -> Result<Arc<Vec<User>>, reqwest::Error> {
         {   //clean cache
             let now = Instant::now();
             let mut cache = self.follow_cache.lock().unwrap();        
-            cache.retain(|(ts, _, _)| now.duration_since(*ts).as_secs() < 24*60*60); //TODO no idea what the * does here, that really should not work...
+            cache.retain(|entry| entry.created_at.elapsed().as_secs() < 24*60*60);
 
-            if let Some(cache_entry) = cache.iter().find(|(_, channel, _)| channel == &from_channel) {            
-                return Ok(cache_entry.2.clone());
+            if let Some(cache_entry) = cache.iter().find(|entry| entry.from_channel == from_channel) {            
+                return Ok(cache_entry.to_users.clone());
             }
         }
 
+        // find channel id
         let id = self.get_channel_id(&from_channel)?;
         if id.is_none() {
             return Ok(Arc::new(Vec::new()));
         }
+
+        // find the channels the user is following
         let following = self.query_following(&id.unwrap())?;
         info!("Loaded & Cached the {} streams {} is following", following.len(), from_channel);
-        let ret = Arc::new(following);
 
-        let mut cache = self.follow_cache.lock().unwrap(); 
-        cache.push((Instant::now(), from_channel.to_owned(), ret.clone()));
-        return Ok(ret);
+        // lookup the user data of the followed channels
+        let users = Arc::new({
+            let mut users = Vec::new();
+            for chunk in following.chunks(100) {
+                users.append(&mut self.query_users(chunk)?);
+            }
+            users
+        });
+
+        {
+            let mut cache = self.follow_cache.lock().unwrap(); 
+            cache.push(FollowCacheEntry{created_at: Instant::now(), from_channel: from_channel.to_owned(), to_users: users.clone()});
+        }
+
+        return Ok(users);
     }
 
 
@@ -133,16 +176,21 @@ impl Twitch {
         return Ok(following);
     }
 
-    pub fn get_online_following(&self, from_channel: String) -> Result<Vec<serde_json::Value>, reqwest::Error> {
+    pub fn get_online_following(&self, from_channel: String) -> Result<Vec<FollowResponse>, reqwest::Error> {
         let following = self.get_following(&from_channel)?;
-        let mut online: Vec<serde_json::Value> = Vec::new();
 
+        let mut online: Vec<FollowResponse> = Vec::new();
         for chunk in following.chunks(100) {
-            let request_url = format!("https://api.twitch.tv/helix/streams?first=100&user_id={}", chunk.join("&user_id="));
-            let mut response: Data<serde_json::Value> = self.client.get(&request_url)
+            let request_url = format!("https://api.twitch.tv/helix/streams?first=100&user_id={}", chunk.iter().map(|user| &user.id).join("&user_id="));
+            let twitch_response: Data<Stream> = self.client.get(&request_url)
                     .bearer_auth(&self.auth_token.access_token)
                     .send()?.json()?;
-            online.append(&mut response.data);
+            
+            for stream in twitch_response.data {
+                let user = chunk.iter().find(|user| user.id == stream.user_id)
+                    .expect(&format!("Twitch API Response to Streams contained a Stream that was not in the Request: {:?}", stream));
+                online.push(FollowResponse { profile_image_url: user.profile_image_url.clone(), offline_image_url: user.offline_image_url.clone(), stream });
+            }
         }
 
         info!("Checked the {} streams {} is following. {} are online", following.len(), from_channel, online.len());
