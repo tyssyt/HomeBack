@@ -2,10 +2,13 @@ use std::env;
 use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use reqwest::{Client, header};
+use reqwest::header;
+use reqwest::blocking::Client;
 use serde::{Serialize, Deserialize};
 use log::info;
 use itertools::Itertools;
+
+// TODO switch to non-blocking reqwest
 
 pub struct Twitch {
     client: Client,

@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::error::Error;
-use reqwest::Client;
+use reqwest::blocking::Client;
 use threadpool::ThreadPool;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -12,6 +12,8 @@ use super::files::sanitize_path;
 use lazy_static::lazy_static;
 use regex::Regex;
 use log::error;
+
+// TODO switch to non-blocking reqwest
 
 lazy_static! {
     static ref SCAN_FOLDER :     PathBuf = PathBuf::from(env::var("SCAN_FOLDER").expect("SCAN_FOLDER not set"));

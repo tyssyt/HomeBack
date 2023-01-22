@@ -2,13 +2,15 @@ use std::env;
 use std::fs;
 use log::info;
 use std::time::{SystemTime, Duration, Instant};
-use reqwest::Client;
+use reqwest::blocking::Client;
 use std::sync::{Arc, Mutex};
 use super::files::sanitize_path;
-use std::process::{Command};
+use std::process::Command;
 use serde::Serialize;
 use threadpool::ThreadPool;
 use std::error::Error;
+
+// TODO switch to non-blocking reqwest
 
 lazy_static! {
     static ref WEB_BASE_FOLDER : String = env::var("WEB_BASE_FOLDER").expect("WEB_BASE_FOLDER not set");
