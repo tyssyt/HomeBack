@@ -38,13 +38,6 @@ struct Follow {
     to_id: String,
 }
 
-#[derive(Deserialize, Debug)]
-struct FollowData {
-    data: Vec<Follow>,
-    total: i32,
-    pagination: Pagination,
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 struct Stream {
     user_id: String,
@@ -54,7 +47,13 @@ struct Stream {
 
 #[derive(Deserialize, Debug)]
 struct Data<T> {
-    data: Vec<T>
+    data: Vec<T>,
+}
+
+#[derive(Deserialize, Debug)]
+struct PagedData<T> {
+    data: Vec<T>,    
+    pagination: Pagination,
 }
 
 #[derive(Deserialize, Debug)]
@@ -108,7 +107,7 @@ impl Twitch {
         }
     }
 
-    pub fn query_users(&self, ids: &[String]) -> Result<Vec<User>, reqwest::Error> {        
+    fn query_users(&self, ids: &[String]) -> Result<Vec<User>, reqwest::Error> {        
         let request_url = format!("https://api.twitch.tv/helix/users?id={}", ids.join("&id="));
         let response: Data<User> = self.client.get(&request_url)
                 .bearer_auth(&self.auth_token.access_token)
@@ -116,9 +115,8 @@ impl Twitch {
         return Ok(response.data);
     }
 
-    pub fn get_following(&self, from_channel: &str) -> Result<Arc<Vec<User>>, reqwest::Error> {
+    fn get_following(&self, from_channel: &str) -> Result<Arc<Vec<User>>, reqwest::Error> {
         {   //clean cache
-            let now = Instant::now();
             let mut cache = self.follow_cache.lock().unwrap();        
             cache.retain(|entry| entry.created_at.elapsed().as_secs() < 24*60*60);
 
@@ -158,7 +156,7 @@ impl Twitch {
     fn query_following(&self, from_id: &String) -> Result<Vec<String>, reqwest::Error> {
         let request_url = format!("https://api.twitch.tv/helix/users/follows?from_id={}&first=100", from_id);
 
-        let mut response: FollowData = self.client.get(&request_url)
+        let mut response: PagedData<Follow> = self.client.get(&request_url)
                 .bearer_auth(&self.auth_token.access_token)
                 .send()?.json()?;
         let mut following: Vec<String> = response.data.into_iter().map(|follow| follow.to_id).collect();
