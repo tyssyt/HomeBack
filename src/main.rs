@@ -91,7 +91,7 @@ async fn stop_chat() -> impl Responder {
 }
 
 #[get("/twitch/live/{channel}")]
-async fn get_twitch_live(web::Path(channel): web::Path<String>) -> impl Responder {
+async fn get_twitch_live(channel: web::Path<String>) -> impl Responder {
     HttpResponse::Ok().json(&*TWITCH.get_online_following(channel.to_lowercase()).unwrap())
 }
 
@@ -101,19 +101,19 @@ async fn get_scans() -> impl Responder {
 }
 
 #[get("/download/scan/{file}")]
-async fn get_scan(web::Path(file): web::Path<String>) -> impl Responder {
-    HttpResponse::Ok().json(download::read_scan_file(file).unwrap())
+async fn get_scan(file: web::Path<String>) -> impl Responder {
+    HttpResponse::Ok().json(download::read_scan_file(file.into_inner()).unwrap())
 }
 
 #[get("/download/files/{subfolder}")]
-async fn get_downloads_subfolder(web::Path(subfolder): web::Path<String>) -> impl Responder {
-    HttpResponse::Ok().json(download::read_downloads_subfolder(subfolder).unwrap())
+async fn get_downloads_subfolder(subfolder: web::Path<String>) -> impl Responder {
+    HttpResponse::Ok().json(download::read_downloads_subfolder(subfolder.into_inner()).unwrap())
 }
 
 
 #[get("/download/{uuid}")]
-async fn get_download(web::Path(uuid): web::Path<Uuid>) -> impl Responder {
-    match DOWNLOAD_MANAGER.get_download(uuid) {
+async fn get_download(uuid: web::Path<Uuid>) -> impl Responder {
+    match DOWNLOAD_MANAGER.get_download(uuid.into_inner()) {
         Some(download) => HttpResponse::Ok().json(download),
         None           => HttpResponse::NoContent().finish()
     }
@@ -133,12 +133,12 @@ struct Download {
 async fn post_download(web::Json(Download{url, path, query}): web::Json<Download>) -> impl Responder {
     let download = DOWNLOAD_MANAGER.trigger_download(url, path, query).unwrap();
     let location = format!("/download/{}", download.uuid);
-    HttpResponse::Created().header(http::header::LOCATION, &*location).json(download)
+    HttpResponse::Created().append_header((http::header::LOCATION, &*location)).json(download)
 }
 
 #[delete("/download/{uuid}")]
-async fn cancel_download(web::Path(uuid): web::Path<Uuid>) -> impl Responder {
-    DOWNLOAD_MANAGER.cancel_download(uuid);
+async fn cancel_download(uuid: web::Path<Uuid>) -> impl Responder {
+    DOWNLOAD_MANAGER.cancel_download(uuid.into_inner());
     HttpResponse::NoContent().finish()
 }
 
@@ -173,7 +173,7 @@ async fn get_dvbc_tv_previews(web::Json(channel_names): web::Json<Vec<String>>) 
     }
 }
 
-#[actix_rt::main]
+#[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).write_style(WriteStyle::Always).init();
