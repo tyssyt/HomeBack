@@ -75,7 +75,7 @@ async fn stop_videoplayer() -> impl Responder {
 async fn get_chat() -> impl Responder {
     match CHAT.running() {
         Some(stream) => HttpResponse::Ok().json(&*stream),
-        None         => HttpResponse::NoContent().finish()
+        None         => HttpResponse::NoContent().finish(),
     }
 }
 
@@ -115,7 +115,7 @@ async fn get_downloads_subfolder(subfolder: web::Path<String>) -> impl Responder
 async fn get_download(uuid: web::Path<Uuid>) -> impl Responder {
     match DOWNLOAD_MANAGER.get_download(uuid.into_inner()) {
         Some(download) => HttpResponse::Ok().json(download),
-        None           => HttpResponse::NoContent().finish()
+        None           => HttpResponse::NoContent().finish(),
     }
 }
 #[get("/download")]
@@ -131,7 +131,7 @@ struct Download {
 }
 #[post("/download")]
 async fn post_download(web::Json(Download{url, path, query}): web::Json<Download>) -> impl Responder {
-    let download = DOWNLOAD_MANAGER.trigger_download(url, path, query).unwrap();
+    let download = DOWNLOAD_MANAGER.trigger_download(url, path, query);
     let location = format!("/download/{}", download.uuid);
     HttpResponse::Created().append_header((http::header::LOCATION, &*location)).json(download)
 }
