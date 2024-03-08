@@ -1,6 +1,12 @@
 #[macro_use]
 extern crate lazy_static;
 
+mod process;
+mod twitch;
+mod download;
+mod dvbc;
+mod files;
+
 use std::env;
 use dotenv::dotenv;
 use env_logger::{Env, WriteStyle};
@@ -8,12 +14,6 @@ use actix_web::{App, HttpResponse, HttpServer, Responder, get, put, post, delete
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use process::*;
-
-mod process;
-mod twitch;
-mod download;
-mod dvbc;
-mod files;
 
 lazy_static! {
     static ref CHAT:             ProcessHandler<String, process::Chat>        = process::ProcessHandler::new(process::Chat{}, None);
@@ -90,9 +90,27 @@ async fn stop_chat() -> impl Responder {
     HttpResponse::NoContent().finish()
 }
 
-#[get("/twitch/live/{channel}")]
-async fn get_twitch_live(channel: web::Path<String>) -> impl Responder {
-    HttpResponse::Ok().json(&*TWITCH.get_online_following(channel.to_lowercase()).unwrap())
+#[put("/twitch/login")]
+async fn put_twitch_login() -> impl Responder {
+    HttpResponse::Ok().json(TWITCH.create_user_login().unwrap())
+}
+
+#[get("/twitch/login/{id}")]
+async fn get_twitch_login(id: web::Path<Uuid>) -> impl Responder {
+    if let Some(login) = TWITCH.get_user_login(*id) {
+        HttpResponse::Ok().json(login)
+    } else {
+        HttpResponse::NotFound().finish()
+    }
+}
+
+#[get("/twitch/live/{id}")]
+async fn get_twitch_live(id: web::Path<Uuid>) -> impl Responder {
+    if let Some(streams) = TWITCH.get_online_following(*id).unwrap() {
+        HttpResponse::Ok().json(streams)
+    } else {
+        HttpResponse::NotFound().finish()
+    }
 }
 
 #[get("/download/scan")]
@@ -186,6 +204,8 @@ async fn main() -> std::io::Result<()> {
             .service(get_chat)
             .service(open_chat)
             .service(stop_chat)
+            .service(put_twitch_login)
+            .service(get_twitch_login)
             .service(get_twitch_live)
             .service(get_scans)
             .service(get_scan)
