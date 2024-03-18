@@ -5,7 +5,10 @@ mod process;
 mod twitch;
 mod download;
 mod dvbc;
+mod dvbc_preview;
 mod files;
+
+use dvbc_preview::ChannelPreview;
 
 use std::env;
 use dotenv::dotenv;
@@ -21,7 +24,7 @@ lazy_static! {
     static ref TWITCH:           twitch::Twitch                               = twitch::Twitch::new();
     static ref DOWNLOAD_MANAGER: download::DownloadManager                    = download::DownloadManager::new();
     static ref DVBC:             dvbc::DvbC                                   = dvbc::DvbC::new();
-    static ref DVBC_PREVIEWS:    dvbc::DvbCPreviews                           = dvbc::DvbCPreviews::new();
+    static ref DVBC_PREVIEWS:    dvbc_preview::DvbCPreviews                   = dvbc_preview::DvbCPreviews::new();
 }
 
 #[derive(Serialize, Deserialize)]
@@ -43,7 +46,7 @@ impl From<&VideoPlayerArgs> for VideoPlayerSomthing {
 async fn get_videoplayer() -> impl Responder {
     match VIDEO_PLAYER.running() {
         Some(args) => HttpResponse::Ok().json(VideoPlayerSomthing::from(&*args)),
-        None         => HttpResponse::NoContent().finish()
+        None => HttpResponse::NoContent().finish()
     }
 }
 
@@ -75,7 +78,7 @@ async fn stop_videoplayer() -> impl Responder {
 async fn get_chat() -> impl Responder {
     match CHAT.running() {
         Some(stream) => HttpResponse::Ok().json(&*stream),
-        None         => HttpResponse::NoContent().finish(),
+        None => HttpResponse::NoContent().finish(),
     }
 }
 
@@ -133,7 +136,7 @@ async fn get_downloads_subfolder(subfolder: web::Path<String>) -> impl Responder
 async fn get_download(uuid: web::Path<Uuid>) -> impl Responder {
     match DOWNLOAD_MANAGER.get_download(uuid.into_inner()) {
         Some(download) => HttpResponse::Ok().json(download),
-        None           => HttpResponse::NoContent().finish(),
+        None => HttpResponse::NoContent().finish(),
     }
 }
 #[get("/download")]
@@ -145,11 +148,10 @@ async fn get_downloads() -> impl Responder {
 struct Download {
     url: String,
     path: String,
-    query: Option<String>,
 }
 #[post("/download")]
-async fn post_download(web::Json(Download{url, path, query}): web::Json<Download>) -> impl Responder {
-    let download = DOWNLOAD_MANAGER.trigger_download(url, path, query);
+async fn post_download(web::Json(Download{url, path}): web::Json<Download>) -> impl Responder {
+    let download = DOWNLOAD_MANAGER.trigger_download(url, path);
     let location = format!("/download/{}", download.uuid);
     HttpResponse::Created().append_header((http::header::LOCATION, &*location)).json(download)
 }
@@ -164,7 +166,7 @@ async fn cancel_download(uuid: web::Path<Uuid>) -> impl Responder {
 async fn get_dvbc_tv() -> impl Responder {
     match DVBC.get_channels() {
         Some(channels) => { let response: Vec<&String> = channels.tv.iter().map(|c| &c.name).collect(); HttpResponse::Ok().json(response) }
-        None           => HttpResponse::NoContent().finish(), // TODO some return code that specifies we couldn't load channels
+        None => HttpResponse::NoContent().finish(), // TODO some return code that specifies we couldn't load channels
     }
 }
 
@@ -172,7 +174,7 @@ async fn get_dvbc_tv() -> impl Responder {
 async fn get_dvbc_radio() -> impl Responder {
     match DVBC.get_channels() {
         Some(channels) => { let response: Vec<&String> = channels.radio.iter().map(|c| &c.name).collect(); HttpResponse::Ok().json(response) }
-        None           => HttpResponse::NoContent().finish(), // TODO some return code that specifies we couldn't load channels
+        None => HttpResponse::NoContent().finish(), // TODO some return code that specifies we couldn't load channels
     }
 }
 
@@ -181,10 +183,10 @@ async fn get_dvbc_tv_previews(web::Json(channel_names): web::Json<Vec<String>>) 
     match DVBC.get_channels() {
         None => HttpResponse::InternalServerError().finish(), // TODO some return code / header that specifies we couldn't load channels
         Some(channels) => {
-            let previews : Vec<Option<dvbc::ChannelPreview>> = channel_names.iter()
+            let previews : Vec<Option<ChannelPreview>> = channel_names.iter()
                 .map(|name| channels.tv.iter()
                     .find(|channel| &channel.name == name)
-                    .map(|channel| DVBC_PREVIEWS.get_preview(channel))
+                    .map(|channel| DVBC_PREVIEWS.get_preview(channel).unwrap())
             ).collect();
             HttpResponse::Ok().json(&previews)
         }

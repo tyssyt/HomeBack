@@ -49,15 +49,20 @@ pub fn read_scan_file(file: String) -> io::Result<Vec<String>> {
     return Ok(links);
 }
 
-pub fn read_downloads_subfolder(subfolder: String) -> io::Result<Vec<String>> {
+#[derive(Serialize, Debug)]
+pub struct File {
+    pub name: String,
+    pub size: Option<u64>,
+}
+pub fn read_downloads_subfolder(subfolder: String) -> io::Result<Vec<File>> {
     let files: Vec<_> = fs::read_dir(DOWNLOAD_FOLDER.join(sanitize_path(&subfolder)))?
         .filter_map(|file| file.ok())
         .filter(|file| file.file_type().map_or(false, |f_type| f_type.is_file()))
-        .map(|file| file.file_name().into_string().unwrap())
+        .map(|file| File{name: file.file_name().into_string().unwrap(), size: file.metadata().ok().map(|metadata| metadata.len())})
         .collect();
 
-        info!("found {} files in {}", files.len(), subfolder);    
-        Ok(files)
+    info!("found {} files in {}", files.len(), subfolder);    
+    Ok(files)
 }
 
 pub struct DownloadManager {
@@ -140,16 +145,11 @@ impl DownloadManager {
         self.queue.lock().unwrap().retain(|dl| dl.uuid != uuid);
     }
 
-    pub fn trigger_download(&'static self, url: String, path: String, query: Option<String>) -> Download {
-        let full_url = match query {
-                Some(q) => format!("{}?{}", url, q),
-                None => url,
-        };
-
+    pub fn trigger_download(&'static self, url: String, path: String) -> Download {
         let raw_download = Download{
             status: Status::Created,
             uuid: Uuid::new_v4(),
-            url: full_url,
+            url,
             path: sanitize_path(&path),
             current_size: 0,
             size: None

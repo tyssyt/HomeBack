@@ -1,20 +1,11 @@
 use std::env;
-use std::fs;
 use log::info;
-use std::time::{SystemTime, Duration, Instant};
+use std::time::{Duration, Instant};
 use reqwest::blocking::Client;
 use std::sync::{Arc, Mutex};
-use super::files::sanitize_path;
-use std::process::Command;
-use serde::Serialize;
-use threadpool::ThreadPool;
-use std::error::Error;
 
 // TODO switch to non-blocking reqwest
-
-lazy_static! {
-    static ref WEB_BASE_FOLDER : String = env::var("WEB_BASE_FOLDER").expect("WEB_BASE_FOLDER not set");
-}
+// TODO more logging
 
 pub struct DvbC {
     client: Client,
@@ -86,64 +77,5 @@ impl DvbC {
             }
         }
         Ok(channels)
-    }
-}
-
-pub struct DvbCPreviews {
-    threadpool: Mutex<ThreadPool>, //Mutex because: https://github.com/rust-threadpool/rust-threadpool/issues/96
-}
-
-#[derive(Serialize)]
-pub struct ChannelPreview {
-    url: String,
-    created: Option<u128>,
-}
-
-impl DvbCPreviews {
-
-    pub fn new() -> DvbCPreviews {
-        DvbCPreviews {
-            threadpool: Mutex::new(ThreadPool::new(2))
-        }
-    }
-
-    pub fn get_preview(&'static self, channel: &Channel) -> ChannelPreview {
-        // TODO this is not as efficient as it could be w.r.t. handling and copying strings
-        let url = sanitize_path(&format!("/img/tv/preview/{}.jpg", &channel.name.replace(" ", "_"))).into_os_string().into_string().unwrap();
-        let path = format!("{}{}", &*WEB_BASE_FOLDER, &url);
-
-        let created = fs::metadata(&path).ok().map(|meta| meta.created().ok()).flatten();
-        if created.map(|ts| ts.elapsed().ok()).flatten().map_or(false, |duration| duration.as_secs() <= 60*5) {
-            return ChannelPreview{url, created: created.map(|ts| ts.duration_since(SystemTime::UNIX_EPOCH).ok()).flatten().map(|duration| duration.as_millis())};
-        }
-
-        // there is no file or it is too old, add to queue for creation
-        self.request_preview(channel).unwrap(); // TODO do not unwrap
-        ChannelPreview{url, created: None}
-    }
-
-    fn request_preview(&'static self, channel: &Channel) -> Result<(), Box<dyn Error>> { // TODO actual error Type, no need to box
-        let lock = self.threadpool.lock()?;
-        if lock.queued_count() < 2 {
-            let clone = channel.clone();
-            lock.execute(move || self.create_preview(clone));
-        }
-        Ok(())
-    }
-
-    fn create_preview(&self, channel: Channel) {
-        let path = sanitize_path(&format!("{}/img/tv/preview/{}.jpg", &*WEB_BASE_FOLDER, &channel.name.replace(" ", "_"))).into_os_string().into_string().unwrap();
-        info!("calling ffmpeg to: {:?}", path);
-        Command::new("ffmpeg")
-            .arg("-hide_banner")
-            .arg("-loglevel").arg("panic")
-            .arg("-y")
-            .arg("-i").arg(&channel.url)
-            .arg("-vframes").arg("1")
-            .arg(&path)
-            //.stdin(Stdio::null())
-            //.stdout(Stdio::null())
-            //.stderr(Stdio::null())
-            .status().unwrap(); // TODO deal with the unwrap!
     }
 }
